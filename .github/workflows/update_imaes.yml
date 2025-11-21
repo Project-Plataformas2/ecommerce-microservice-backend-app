@@ -1,0 +1,201 @@
+name: Deploy on PR Merge and Trigger Chart Update
+          
+on:
+  pull_request:
+    types:
+      - closed # Se dispara cuando un PR se cierra
+    branches:
+      - master # O main, tu rama principal de producción
+      - dev
+      - qa
+  workflow_dispatch: # Permite disparo manual
+    inputs:
+      simulated_pr_title:
+        description: 'Simulated PR Title (e.g., "Release v1.2.3" or "Feature v0.5.0")'
+        required: true
+        type: string
+      simulated_target_branch:
+        description: 'Simulated Target Branch (master, qa, or dev)'
+        required: true
+        type: choice
+        options:
+          - dev
+          - qa
+          - master
+        default: 'master'
+            
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: read
+            
+jobs:
+  build-push-and-trigger-on-merge:
+    runs-on: ubuntu-22.04
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+            
+    steps:
+      - name: Checkout Microservices Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 20 
+            
+      - name: Extract Version and Determine Environment
+        id: set-env-details
+        run: |
+          EVENT_TYPE="${{ github.event_name }}"
+          echo "Workflow triggered by event: $EVENT_TYPE"
+            
+          PR_TITLE=""
+          EFFECTIVE_BRANCH_NAME=""
+            
+          if [[ "$EVENT_TYPE" == "workflow_dispatch" ]]; then
+            PR_TITLE="${{ github.event.inputs.simulated_pr_title }}"
+            EFFECTIVE_BRANCH_NAME="${{ github.event.inputs.simulated_target_branch }}"
+          elif [[ "$EVENT_TYPE" == "pull_request" && "${{ github.event.pull_request.merged }}" == "true" ]]; then
+            PR_TITLE="${{ github.event.pull_request.title }}"
+            EFFECTIVE_BRANCH_NAME="${{ github.base_ref }}"
+          else
+            echo "::error::Workflow job started with an unexpected event combination."
+            exit 1
+          fi
+            
+          echo "Pull Request Title (before version extraction): '$PR_TITLE'" 
+            
+          IMAGE_VERSION_FROM_PR=$(echo "$PR_TITLE" | sed -n 's/.*\b\(v\?[0-9]\+\.[0-9]\+\.[0-9]\+\)\b.*/\1/p')
+            
+          if [ -z "$IMAGE_VERSION_FROM_PR" ]; then
+            echo "::error::Could not extract semantic version (e.g., v1.2.3 or 1.2.3) from PR title: '$PR_TITLE'."
+            exit 1
+          fi
+          echo "Extracted Image Version: $IMAGE_VERSION_FROM_PR"
+            
+          TARGET_VALUES_FILE=""
+          ENVIRONMENT_NAME=""
+            
+          if [[ "$EFFECTIVE_BRANCH_NAME" == "master" || "$EFFECTIVE_BRANCH_NAME" == "main" ]]; then
+            TARGET_VALUES_FILE="values-master.yaml"
+            ENVIRONMENT_NAME="prod"
+          elif [[ "$EFFECTIVE_BRANCH_NAME" == "qa" ]]; then
+            TARGET_VALUES_FILE="values-qa.yaml"
+            ENVIRONMENT_NAME="qa"
+          elif [[ "$EFFECTIVE_BRANCH_NAME" == "dev" ]]; then
+            TARGET_VALUES_FILE="values-dev.yaml"
+            ENVIRONMENT_NAME="dev"
+          else
+            echo "::error::Effective branch '$EFFECTIVE_BRANCH_NAME' is not configured for a target environment. Exiting."
+            exit 1
+          fi
+            
+          echo "TARGET_VALUES_FILE_ENV=$TARGET_VALUES_FILE" >> $GITHUB_ENV
+          echo "IMAGE_VERSION_ENV=$IMAGE_VERSION_FROM_PR" >> $GITHUB_ENV
+          echo "EFFECTIVE_BRANCH_NAME_ENV=$EFFECTIVE_BRANCH_NAME" >> $GITHUB_ENV
+          echo "ENVIRONMENT_NAME_ENV=$ENVIRONMENT_NAME" >> $GITHUB_ENV
+            
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+            
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with: 
+          distribution: 'temurin' 
+          java-version: '17'
+            
+      - name: Build with Maven
+        run: ./mvnw clean package -DskipTests
+            
+      - name: Build, Tag, and Push Docker Images (Per Service)
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          ENV_NAME: ${{ env.ENVIRONMENT_NAME_ENV }} 
+          IMAGE_TAG: ${{ env.IMAGE_VERSION_ENV }}
+        run: |
+          if [ -z "$DOCKER_USERNAME" ] || [ -z "$ENV_NAME" ] || [ -z "$IMAGE_TAG" ]; then
+            echo "::error::Critical environment variables for Docker push are missing."
+            exit 1
+          fi
+          services=( cloud-config service-discovery api-gateway proxy-client order-service payment-service product-service shipping-service user-service favourite-service )
+            
+          for service_name in "${services[@]}"; do
+            DOCKER_REPO_NAME_FOR_SERVICE="$DOCKER_USERNAME/$service_name"
+            CONTEXT_PATH="./${service_name}"; DOCKERFILE_PATH="${CONTEXT_PATH}/Dockerfile"
+            if [ ! -f "$DOCKERFILE_PATH" ]; then echo "::warning::Dockerfile $DOCKERFILE_PATH not found for $service_name. Skipping."; continue; fi
+            
+            IMAGE_PATH_VERSIONED="$DOCKER_REPO_NAME_FOR_SERVICE:$IMAGE_TAG"
+            IMAGE_PATH_LATEST="$DOCKER_REPO_NAME_FOR_SERVICE:latest" 
+            
+            docker build -t "$IMAGE_PATH_VERSIONED" -f "$DOCKERFILE_PATH" "$CONTEXT_PATH"
+            docker tag "$IMAGE_PATH_VERSIONED" "$IMAGE_PATH_LATEST"
+            
+            docker push "$IMAGE_PATH_VERSIONED"
+            docker push "$IMAGE_PATH_LATEST"
+          done
+            
+      - name: Trigger chart repository update
+        env:
+          SCRIPT_DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          SCRIPT_TARGET_VALUES_FILE: ${{ env.TARGET_VALUES_FILE_ENV }}
+          SCRIPT_EFFECTIVE_BRANCH_NAME: ${{ env.EFFECTIVE_BRANCH_NAME_ENV }} 
+          SCRIPT_ENVIRONMENT_NAME: ${{ env.ENVIRONMENT_NAME_ENV }} 
+          SCRIPT_IMAGE_VERSION: ${{ env.IMAGE_VERSION_ENV }} 
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CHARTS_REPO_TOKEN }}
+          script: |
+            const docker_hub_username = process.env.SCRIPT_DOCKER_USERNAME; 
+            const services_to_update = ['cloud-config', 'service-discovery', 'api-gateway', 'proxy-client', 'order-service', 'payment-service', 'product-service', 'shipping-service', 'user-service', 'favourite-service'];
+            
+            await github.rest.repos.createDispatchEvent({
+              owner: 'Project-Plataformas2', repo: 'Ecommerce-deploy', event_type: 'update-image-tags',
+              client_payload: {
+                effective_branch: process.env.SCRIPT_EFFECTIVE_BRANCH_NAME, 
+                image_version_tag: process.env.SCRIPT_IMAGE_VERSION, 
+                image_registry_base: docker_hub_username, 
+                services_to_update: services_to_update,
+                target_values_file: process.env.SCRIPT_TARGET_VALUES_FILE,
+                environment_name: process.env.SCRIPT_ENVIRONMENT_NAME
+              }
+            });
+            console.log(`Successfully triggered chart update for ${process.env.SCRIPT_TARGET_VALUES_FILE} using image version ${process.env.SCRIPT_IMAGE_VERSION}.`);
+            
+      - name: Generate Release Notes from PR
+        # CORRECCIÓN: Solo se ejecuta si el workflow fue disparado por la fusión de un PR.
+        if: github.event_name == 'pull_request'
+        env:
+          NOTES_IMAGE_VERSION: ${{ env.IMAGE_VERSION_ENV }}
+        run: |
+          echo "Release Notes for Version: ${NOTES_IMAGE_VERSION}" > release-notes-${NOTES_IMAGE_VERSION}.md
+          echo "PR Title: ${{ github.event.pull_request.title }}" >> release-notes-${NOTES_IMAGE_VERSION}.md
+          echo "PR URL: ${{ github.event.pull_request.html_url }}" >> release-notes-${NOTES_IMAGE_VERSION}.md
+          echo "Merged by: ${{ github.event.pull_request.merged_by.login }}" >> release-notes-${NOTES_IMAGE_VERSION}.md
+          echo "---" >> release-notes-${NOTES_IMAGE_VERSION}.md
+          echo "${{ github.event.pull_request.body }}" >> release-notes-${NOTES_IMAGE_VERSION}.md
+            
+      - name: Upload Release Notes
+        # CORRECCIÓN: Solo se ejecuta si el workflow fue disparado por la fusión de un PR.
+        if: success() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes-${{ env.IMAGE_VERSION_ENV }}
+          path: release-notes-${{ env.IMAGE_VERSION_ENV }}.md
+            
+      - name: Deployment Summary
+        env:
+          SUMMARY_DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          SUMMARY_IMAGE_VERSION: ${{ env.IMAGE_VERSION_ENV }}
+          SUMMARY_TARGET_VALUES_FILE: ${{ env.TARGET_VALUES_FILE_ENV }}
+          SUMMARY_EFFECTIVE_BRANCH: ${{ env.EFFECTIVE_BRANCH_NAME_ENV }}
+          SUMMARY_ENVIRONMENT_NAME: ${{ env.ENVIRONMENT_NAME_ENV }}
+        run: |
+          echo "## Deployment Summary for PR Merge to: ${SUMMARY_EFFECTIVE_BRANCH}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target Environment:** ${SUMMARY_ENVIRONMENT_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target Values File Updated in Chart:** ${SUMMARY_TARGET_VALUES_FILE}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Version Pushed to Docker Hub:** ${SUMMARY_IMAGE_VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Docker Hub Username (Registry Base):** ${SUMMARY_DOCKER_USERNAME}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Docker Hub Repositories (Pattern):** ${SUMMARY_DOCKER_USERNAME}/serviceName" >> $GITHUB_STEP_SUMMARY
+          echo "- **Chart Update Event Dispatched To:** Project-Plataformas2/Ecommerce-deploy" >> $GITHUB_STEP_SUMMARY
