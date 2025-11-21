@@ -134,10 +134,8 @@ jobs:
             IMAGE_PATH_VERSIONED="$DOCKER_REPO_NAME_FOR_SERVICE:$IMAGE_TAG"
             IMAGE_PATH_LATEST="$DOCKER_REPO_NAME_FOR_SERVICE:latest" 
             
-            # El comando ahora es: docker build ... -f ./service/Dockerfile .
-            echo "Building image: $IMAGE_PATH_VERSIONED with context $CONTEXT_PATH"
-            docker build -t "$IMAGE_PATH_VERSIONED" -f "$DOCKERFILE_PATH" "$CONTEXT_PATH"
-            
+
+            docker build -t "$IMAGE_PATH_VERSIONED" -f "$DOCKERFILE_PATH" .
             docker tag "$IMAGE_PATH_VERSIONED" "$IMAGE_PATH_LATEST"
             
             echo "Pushing: $IMAGE_PATH_VERSIONED"
