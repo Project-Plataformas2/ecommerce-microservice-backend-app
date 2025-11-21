@@ -76,7 +76,7 @@ jobs:
           ENVIRONMENT_NAME=""
             
           if [[ "$EFFECTIVE_BRANCH_NAME" == "master" || "$EFFECTIVE_BRANCH_NAME" == "main" ]]; then
-            TARGET_VALUES_FILE="values-master.yaml"
+            TARGET_VALUES_FILE="values-prod.yaml"
             ENVIRONMENT_NAME="prod"
           elif [[ "$EFFECTIVE_BRANCH_NAME" == "qa" ]]; then
             TARGET_VALUES_FILE="values-qa.yaml"
