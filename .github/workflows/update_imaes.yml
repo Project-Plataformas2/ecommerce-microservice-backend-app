@@ -76,7 +76,7 @@ jobs:
           ENVIRONMENT_NAME=""
             
           if [[ "$EFFECTIVE_BRANCH_NAME" == "master" || "$EFFECTIVE_BRANCH_NAME" == "main" ]]; then
-            TARGET_VALUES_FILE="values-master.yaml"
+            TARGET_VALUES_FILE="values-prod.yaml"
             ENVIRONMENT_NAME="prod"
           elif [[ "$EFFECTIVE_BRANCH_NAME" == "qa" ]]; then
             TARGET_VALUES_FILE="values-qa.yaml"
@@ -123,17 +123,26 @@ jobs:
             
           for service_name in "${services[@]}"; do
             DOCKER_REPO_NAME_FOR_SERVICE="$DOCKER_USERNAME/$service_name"
-            CONTEXT_PATH="./${service_name}"; DOCKERFILE_PATH="${CONTEXT_PATH}/Dockerfile"
+            
+            # --- CORRECCIÓN CLAVE ---
+            # Usar la raíz del proyecto ('.') como contexto para que el ADD del JAR funcione
+            CONTEXT_PATH="." 
+            DOCKERFILE_PATH="./${service_name}/Dockerfile"
+
             if [ ! -f "$DOCKERFILE_PATH" ]; then echo "::warning::Dockerfile $DOCKERFILE_PATH not found for $service_name. Skipping."; continue; fi
             
             IMAGE_PATH_VERSIONED="$DOCKER_REPO_NAME_FOR_SERVICE:$IMAGE_TAG"
             IMAGE_PATH_LATEST="$DOCKER_REPO_NAME_FOR_SERVICE:latest" 
             
-            docker build -t "$IMAGE_PATH_VERSIONED" -f "$DOCKERFILE_PATH" "$CONTEXT_PATH"
+
+            docker build -t "$IMAGE_PATH_VERSIONED" -f "$DOCKERFILE_PATH" .
             docker tag "$IMAGE_PATH_VERSIONED" "$IMAGE_PATH_LATEST"
             
+            echo "Pushing: $IMAGE_PATH_VERSIONED"
             docker push "$IMAGE_PATH_VERSIONED"
+            echo "Pushing: $IMAGE_PATH_LATEST"
             docker push "$IMAGE_PATH_LATEST"
+            echo "Finished processing $service_name."
           done
             
       - name: Trigger chart repository update
