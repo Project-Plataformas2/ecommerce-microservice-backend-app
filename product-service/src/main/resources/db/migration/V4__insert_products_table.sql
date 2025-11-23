@@ -5,4 +5,3 @@ INSERT INTO products
 (1, 'hp', 'xxx', 'zsejfedbjh', 0, 50),
 (2, 'Armani', 'xxx', 'fjdvf', 0, 50),
 (3, 'GTA', 'xxx', 'qsdkjnvfrekjrf', 0, 50);
-
