@@ -1,5 +1,5 @@
 
-CCREATE TABLE orders (
+CREATE TABLE orders (
     order_id INT NOT NULL AUTO_INCREMENT,
     cart_id INT,
     order_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
