@@ -1,61 +1,55 @@
 name: Security Scan Pipeline
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:      # Se ejecuta manualmente desde Actions
 
 jobs:
   build-and-scan:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service:
-          - api-gateway
-          - cloud-config
-          - favourite-service
-          - order-service
-          - payment-service
-          - product-service
-          - proxy-client
-          - service-discovery
-          - shipping-service
-          - user-service
+        service: ["api-gateway", "cloud-config", "favourite-service", "order-service", "payment-service", "product-service", "proxy-client", "service-discovery", "shipping-service", "user-service"]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ⬇️ Compilar proyecto Maven antes de construir imágenes
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Build all microservices with Maven
-        run: |
-          ./mvnw clean package -DskipTests
+      - name: Build services with Maven
+        run: mvn -B clean package -DskipTests
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker image for service
+      - name: Build Docker image
         run: |
           DOCKERFILE="./${{ matrix.service }}/Dockerfile"
           if [ ! -f "$DOCKERFILE" ]; then
-            echo "::error::Dockerfile not found for ${{ matrix.service }} ($DOCKERFILE)"
+            echo "::error::Dockerfile not found for service ${{ matrix.service }} ($DOCKERFILE)"
             exit 1
           fi
           docker build -t ${{ matrix.service }} -f "$DOCKERFILE" .
 
-      - name: Scan image with Trivy
+      # ⬇️ FIX: Crear carpeta antes del escaneo
+      - name: Create results directory
+        run: mkdir -p trivy-results
+
+      - name: Scan with Trivy
         uses: aquasecurity/trivy-action@0.22.0
         with:
           image-ref: ${{ matrix.service }}
           format: "sarif"
           output: "trivy-results/${{ matrix.service }}.sarif"
-          exit-code: "0"   # No falla el pipeline aunque encuentre CVEs
+          exit-code: "0"
           severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
 
-      - name: Upload scan reports
+      - name: Upload SARIF artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -89,7 +83,7 @@ jobs:
         with:
           name: trivy-results
 
-      - name: Upload SARIF to GitHub Security Dashboard
+      - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results/${{ matrix.file }}
