@@ -3,12 +3,12 @@ name: Deploy on PR Merge and Trigger Chart Update
 on:
   pull_request:
     types:
-      - closed # Se dispara cuando un PR se cierra
+      - closed
     branches:
-      - master # O main, tu rama principal de producción
+      - master
       - dev
       - qa
-  workflow_dispatch: # Permite disparo manual
+  workflow_dispatch:
     inputs:
       simulated_pr_title:
         description: 'Simulated PR Title (e.g., "Release v1.2.3" or "Feature v0.5.0")'
@@ -41,6 +41,15 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 20 
+
+      - name: Install Trivy (Optional, does not break pipeline)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy-archive-keyring.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update || echo "Trivy repo update failed, continuing..."
+          sudo apt-get install -y trivy || echo "Trivy installation failed, continuing..."
             
       - name: Extract Version and Determine Environment
         id: set-env-details
@@ -62,12 +71,12 @@ jobs:
             exit 1
           fi
             
-          echo "Pull Request Title (before version extraction): '$PR_TITLE'" 
+          echo "Pull Request Title: '$PR_TITLE'" 
             
           IMAGE_VERSION_FROM_PR=$(echo "$PR_TITLE" | sed -n 's/.*\b\(v\?[0-9]\+\.[0-9]\+\.[0-9]\+\)\b.*/\1/p')
             
           if [ -z "$IMAGE_VERSION_FROM_PR" ]; then
-            echo "::error::Could not extract semantic version (e.g., v1.2.3 or 1.2.3) from PR title: '$PR_TITLE'."
+            echo "::error::Could not extract semantic version from PR title: '$PR_TITLE'."
             exit 1
           fi
           echo "Extracted Image Version: $IMAGE_VERSION_FROM_PR"
@@ -115,34 +124,15 @@ jobs:
           ENV_NAME: ${{ env.ENVIRONMENT_NAME_ENV }} 
           IMAGE_TAG: ${{ env.IMAGE_VERSION_ENV }}
         run: |
-          if [ -z "$DOCKER_USERNAME" ] || [ -z "$ENV_NAME" ] || [ -z "$IMAGE_TAG" ]; then
-            echo "::error::Critical environment variables for Docker push are missing."
-            exit 1
-          fi
           services=( cloud-config service-discovery api-gateway proxy-client order-service payment-service product-service shipping-service user-service favourite-service )
-            
           for service_name in "${services[@]}"; do
-            DOCKER_REPO_NAME_FOR_SERVICE="$DOCKER_USERNAME/$service_name"
-            
-            # --- CORRECCIÓN CLAVE ---
-            # Usar la raíz del proyecto ('.') como contexto para que el ADD del JAR funcione
-            CONTEXT_PATH="." 
+            DOCKER_REPO="$DOCKER_USERNAME/$service_name"
             DOCKERFILE_PATH="./${service_name}/Dockerfile"
-
-            if [ ! -f "$DOCKERFILE_PATH" ]; then echo "::warning::Dockerfile $DOCKERFILE_PATH not found for $service_name. Skipping."; continue; fi
-            
-            IMAGE_PATH_VERSIONED="$DOCKER_REPO_NAME_FOR_SERVICE:$IMAGE_TAG"
-            IMAGE_PATH_LATEST="$DOCKER_REPO_NAME_FOR_SERVICE:latest" 
-            
-
-            docker build -t "$IMAGE_PATH_VERSIONED" -f "$DOCKERFILE_PATH" .
-            docker tag "$IMAGE_PATH_VERSIONED" "$IMAGE_PATH_LATEST"
-            
-            echo "Pushing: $IMAGE_PATH_VERSIONED"
-            docker push "$IMAGE_PATH_VERSIONED"
-            echo "Pushing: $IMAGE_PATH_LATEST"
-            docker push "$IMAGE_PATH_LATEST"
-            echo "Finished processing $service_name."
+            if [ ! -f "$DOCKERFILE_PATH" ]; then echo "::warning::Dockerfile $DOCKERFILE_PATH not found. Skipping."; continue; fi
+            docker build -t "$DOCKER_REPO:$IMAGE_TAG" -f "$DOCKERFILE_PATH" .
+            docker tag "$DOCKER_REPO:$IMAGE_TAG" "$DOCKER_REPO:latest"
+            docker push "$DOCKER_REPO:$IMAGE_TAG"
+            docker push "$DOCKER_REPO:latest"
           done
             
       - name: Trigger chart repository update
@@ -157,8 +147,7 @@ jobs:
           github-token: ${{ secrets.CHARTS_REPO_TOKEN }}
           script: |
             const docker_hub_username = process.env.SCRIPT_DOCKER_USERNAME; 
-            const services_to_update = ['cloud-config', 'service-discovery', 'api-gateway', 'proxy-client', 'order-service', 'payment-service', 'product-service', 'shipping-service', 'user-service', 'favourite-service'];
-            
+            const services_to_update = ['cloud-config','service-discovery','api-gateway','proxy-client','order-service','payment-service','product-service','shipping-service','user-service','favourite-service'];
             await github.rest.repos.createDispatchEvent({
               owner: 'Project-Plataformas2', repo: 'Ecommerce-deploy', event_type: 'update-image-tags',
               client_payload: {
@@ -170,10 +159,8 @@ jobs:
                 environment_name: process.env.SCRIPT_ENVIRONMENT_NAME
               }
             });
-            console.log(`Successfully triggered chart update for ${process.env.SCRIPT_TARGET_VALUES_FILE} using image version ${process.env.SCRIPT_IMAGE_VERSION}.`);
             
-      - name: Generate Release Notes from PR
-        # CORRECCIÓN: Solo se ejecuta si el workflow fue disparado por la fusión de un PR.
+      - name: Generate Release Notes
         if: github.event_name == 'pull_request'
         env:
           NOTES_IMAGE_VERSION: ${{ env.IMAGE_VERSION_ENV }}
@@ -186,7 +173,6 @@ jobs:
           echo "${{ github.event.pull_request.body }}" >> release-notes-${NOTES_IMAGE_VERSION}.md
             
       - name: Upload Release Notes
-        # CORRECCIÓN: Solo se ejecuta si el workflow fue disparado por la fusión de un PR.
         if: success() && github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
         with:
