@@ -1,0 +1,71 @@
+name: Security Scan - Trivy Docker Images
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  TRIVY_VERSION: "0.63.0"
+
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Microservices Repository
+        uses: actions/checkout@v4
+
+      - name: Install Trivy
+        run: |
+          VERSION=${TRIVY_VERSION}
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v${VERSION}
+          trivy --version
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Build Microservices (Maven)
+        run: ./mvnw clean package -DskipTests
+
+      - name: Build & Scan Docker Images using Trivy
+        run: |
+          mkdir -p trivy-results
+          services=( cloud-config service-discovery api-gateway proxy-client order-service payment-service product-service shipping-service user-service favourite-service )
+
+          for service in "${services[@]}"; do
+            DOCKERFILE="./${service}/Dockerfile"
+            if [ ! -f "$DOCKERFILE" ]; then
+              echo "::warning:: No Dockerfile found for $service, skipping..."
+              continue
+            fi
+
+            IMAGE_NAME="local-scan/${service}:latest"
+            echo "--------------------------------------------------"
+            echo "Building image: $IMAGE_NAME"
+            echo "--------------------------------------------------"
+            docker build -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+
+            echo "--------------------------------------------------"
+            echo "Scanning image: $IMAGE_NAME"
+            echo "--------------------------------------------------"
+            trivy image \
+              --exit-code 1 \
+              --scanners vuln \
+              --severity HIGH,CRITICAL \
+              --format sarif \
+              --ignore-unfixed \
+              --output "trivy-results/${service}.sarif" \
+              "$IMAGE_NAME" || true
+          done
+
+      - name: Upload Scan Result Reports to GitHub Security Tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results
