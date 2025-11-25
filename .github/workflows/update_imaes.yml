@@ -11,17 +11,14 @@ on:
   workflow_dispatch:
     inputs:
       simulated_pr_title:
-        description: 'Simulated PR Title (e.g., "Release v1.2.3" or "Feature v0.5.0")'
+        description: 'PR  EJEMPLO "Release v1.2.3"'
         required: true
         type: string
       simulated_target_branch:
-        description: 'Simulated Target Branch (master, qa, or dev)'
+        description: 'RAMA QUE APUNTA master, qa, or dev'
         required: true
         type: choice
-        options:
-          - dev
-          - qa
-          - master
+        options: [dev, qa, master]
         default: 'master'
             
 permissions:
@@ -79,8 +76,7 @@ jobs:
             echo "::error::Could not extract semantic version from PR title: '$PR_TITLE'."
             exit 1
           fi
-          echo "Extracted Image Version: $IMAGE_VERSION_FROM_PR"
-            
+
           TARGET_VALUES_FILE=""
           ENVIRONMENT_NAME=""
             
@@ -94,7 +90,7 @@ jobs:
             TARGET_VALUES_FILE="values-dev.yaml"
             ENVIRONMENT_NAME="dev"
           else
-            echo "::error::Effective branch '$EFFECTIVE_BRANCH_NAME' is not configured for a target environment. Exiting."
+            echo "::error::Effective branch '$EFFECTIVE_BRANCH_NAME' is not configured."
             exit 1
           fi
             
@@ -112,16 +108,16 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with: 
-          distribution: 'temurin' 
+          distribution: 'temurin'
           java-version: '17'
             
       - name: Build with Maven
         run: ./mvnw clean package -DskipTests
             
-      - name: Build, Tag, and Push Docker Images (Per Service)
+      - name: Build, Scan, Tag, and Push Docker Images (Per Service)
         env:
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-          ENV_NAME: ${{ env.ENVIRONMENT_NAME_ENV }} 
+          ENV_NAME: ${{ env.ENVIRONMENT_NAME_ENV }}
           IMAGE_TAG: ${{ env.IMAGE_VERSION_ENV }}
         run: |
           services=( cloud-config service-discovery api-gateway proxy-client order-service payment-service product-service shipping-service user-service favourite-service )
@@ -136,13 +132,13 @@ jobs:
           done
             
       - name: Trigger chart repository update
+        uses: actions/github-script@v7
         env:
           SCRIPT_DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           SCRIPT_TARGET_VALUES_FILE: ${{ env.TARGET_VALUES_FILE_ENV }}
           SCRIPT_EFFECTIVE_BRANCH_NAME: ${{ env.EFFECTIVE_BRANCH_NAME_ENV }} 
           SCRIPT_ENVIRONMENT_NAME: ${{ env.ENVIRONMENT_NAME_ENV }} 
-          SCRIPT_IMAGE_VERSION: ${{ env.IMAGE_VERSION_ENV }} 
-        uses: actions/github-script@v7
+          SCRIPT_IMAGE_VERSION: ${{ env.IMAGE_VERSION_ENV }}
         with:
           github-token: ${{ secrets.CHARTS_REPO_TOKEN }}
           script: |
@@ -153,8 +149,8 @@ jobs:
               client_payload: {
                 effective_branch: process.env.SCRIPT_EFFECTIVE_BRANCH_NAME, 
                 image_version_tag: process.env.SCRIPT_IMAGE_VERSION, 
-                image_registry_base: docker_hub_username, 
-                services_to_update: services_to_update,
+                image_registry_base: process.env.SCRIPT_DOCKER_USERNAME, 
+                services_to_update,
                 target_values_file: process.env.SCRIPT_TARGET_VALUES_FILE,
                 environment_name: process.env.SCRIPT_ENVIRONMENT_NAME
               }
@@ -187,10 +183,8 @@ jobs:
           SUMMARY_EFFECTIVE_BRANCH: ${{ env.EFFECTIVE_BRANCH_NAME_ENV }}
           SUMMARY_ENVIRONMENT_NAME: ${{ env.ENVIRONMENT_NAME_ENV }}
         run: |
-          echo "## Deployment Summary for PR Merge to: ${SUMMARY_EFFECTIVE_BRANCH}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Target Environment:** ${SUMMARY_ENVIRONMENT_NAME}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Target Values File Updated in Chart:** ${SUMMARY_TARGET_VALUES_FILE}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image Version Pushed to Docker Hub:** ${SUMMARY_IMAGE_VERSION}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Docker Hub Username (Registry Base):** ${SUMMARY_DOCKER_USERNAME}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Docker Hub Repositories (Pattern):** ${SUMMARY_DOCKER_USERNAME}/serviceName" >> $GITHUB_STEP_SUMMARY
-          echo "- **Chart Update Event Dispatched To:** Project-Plataformas2/Ecommerce-deploy" >> $GITHUB_STEP_SUMMARY
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${SUMMARY_ENVIRONMENT_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Values File:** ${SUMMARY_TARGET_VALUES_FILE}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Version:** ${SUMMARY_IMAGE_VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Docker Registry Base:** ${SUMMARY_DOCKER_USERNAME}" >> $GITHUB_STEP_SUMMARY
