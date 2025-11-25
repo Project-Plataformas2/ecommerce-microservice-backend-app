@@ -23,7 +23,12 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t ${{ matrix.service }} ./services/${{ matrix.service }}
+          DOCKERFILE="./${{ matrix.service }}/Dockerfile"
+          if [ ! -f "$DOCKERFILE" ]; then
+            echo "::error::Dockerfile not found for service ${{ matrix.service }} ($DOCKERFILE)"
+            exit 1
+          fi
+          docker build -t ${{ matrix.service }} -f "$DOCKERFILE" .
 
       - name: Scan with Trivy
         uses: aquasecurity/trivy-action@0.22.0
@@ -31,7 +36,7 @@ jobs:
           image-ref: ${{ matrix.service }}
           format: "sarif"
           output: "trivy-results/${{ matrix.service }}.sarif"
-          exit-code: "0"              # No falla el job aunque haya vulnerabilidades
+          exit-code: "0"
           severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
 
       - name: Upload SARIF artifacts
@@ -50,18 +55,17 @@ jobs:
 
     strategy:
       matrix:
-        file: [
-          "api-gateway.sarif",
-          "cloud-config.sarif",
-          "favourite-service.sarif",
-          "order-service.sarif",
-          "payment-service.sarif",
-          "product-service.sarif",
-          "proxy-client.sarif",
-          "service-discovery.sarif",
-          "shipping-service.sarif",
-          "user-service.sarif"
-        ]
+        file:
+          - api-gateway.sarif
+          - cloud-config.sarif
+          - favourite-service.sarif
+          - order-service.sarif
+          - payment-service.sarif
+          - product-service.sarif
+          - proxy-client.sarif
+          - service-discovery.sarif
+          - shipping-service.sarif
+          - user-service.sarif
 
     steps:
       - name: Download artifacts
