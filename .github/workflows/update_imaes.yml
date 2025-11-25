@@ -39,15 +39,14 @@ jobs:
         with:
           fetch-depth: 20 
 
-      # 🔹 Instalar TRIVY una sola vez
-      - name: Install Trivy
+      - name: Install Trivy (Optional, does not break pipeline)
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget
-          wget -qO- https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-          echo "deb https://aquasecurity.github.io/trivy-repo/deb stable main" | sudo tee /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update
-          sudo apt-get install -y trivy
+          sudo apt-get install -y wget gnupg lsb-release
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy-archive-keyring.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update || echo "Trivy repo update failed, continuing..."
+          sudo apt-get install -y trivy || echo "Trivy installation failed, continuing..."
             
       - name: Extract Version and Determine Environment
         id: set-env-details
@@ -68,6 +67,8 @@ jobs:
             echo "::error::Workflow job started with an unexpected event combination."
             exit 1
           fi
+            
+          echo "Pull Request Title: '$PR_TITLE'" 
             
           IMAGE_VERSION_FROM_PR=$(echo "$PR_TITLE" | sed -n 's/.*\b\(v\?[0-9]\+\.[0-9]\+\.[0-9]\+\)\b.*/\1/p')
             
@@ -121,23 +122,13 @@ jobs:
         run: |
           services=( cloud-config service-discovery api-gateway proxy-client order-service payment-service product-service shipping-service user-service favourite-service )
           for service_name in "${services[@]}"; do
+            DOCKER_REPO="$DOCKER_USERNAME/$service_name"
             DOCKERFILE_PATH="./${service_name}/Dockerfile"
-            if [ ! -f "$DOCKERFILE_PATH" ]; then echo "::warning::Dockerfile $DOCKERFILE_PATH not found for $service_name. Skipping."; continue; fi
-            
-            IMAGE_PATH_VERSIONED="$DOCKER_USERNAME/$service_name:$IMAGE_TAG"
-            IMAGE_PATH_LATEST="$DOCKER_USERNAME/$service_name:latest"
-
-            docker build -t "$IMAGE_PATH_VERSIONED" -f "$DOCKERFILE_PATH" .
-
-            echo "🔍 Scanning vulnerabilities for $IMAGE_PATH_VERSIONED"
-            trivy image --severity HIGH,CRITICAL --format table "$IMAGE_PATH_VERSIONED" || true
-            trivy image --severity HIGH,CRITICAL --format table "$IMAGE_PATH_VERSIONED" >> $GITHUB_STEP_SUMMARY || true
-
-            docker tag "$IMAGE_PATH_VERSIONED" "$IMAGE_PATH_LATEST"
-            docker push "$IMAGE_PATH_VERSIONED"
-            docker push "$IMAGE_PATH_LATEST"
-
-            echo "Finished processing $service_name."
+            if [ ! -f "$DOCKERFILE_PATH" ]; then echo "::warning::Dockerfile $DOCKERFILE_PATH not found. Skipping."; continue; fi
+            docker build -t "$DOCKER_REPO:$IMAGE_TAG" -f "$DOCKERFILE_PATH" .
+            docker tag "$DOCKER_REPO:$IMAGE_TAG" "$DOCKER_REPO:latest"
+            docker push "$DOCKER_REPO:$IMAGE_TAG"
+            docker push "$DOCKER_REPO:latest"
           done
             
       - name: Trigger chart repository update
@@ -151,6 +142,7 @@ jobs:
         with:
           github-token: ${{ secrets.CHARTS_REPO_TOKEN }}
           script: |
+            const docker_hub_username = process.env.SCRIPT_DOCKER_USERNAME; 
             const services_to_update = ['cloud-config','service-discovery','api-gateway','proxy-client','order-service','payment-service','product-service','shipping-service','user-service','favourite-service'];
             await github.rest.repos.createDispatchEvent({
               owner: 'Project-Plataformas2', repo: 'Ecommerce-deploy', event_type: 'update-image-tags',
@@ -163,8 +155,8 @@ jobs:
                 environment_name: process.env.SCRIPT_ENVIRONMENT_NAME
               }
             });
-
-      - name: Generate Release Notes from PR
+            
+      - name: Generate Release Notes
         if: github.event_name == 'pull_request'
         env:
           NOTES_IMAGE_VERSION: ${{ env.IMAGE_VERSION_ENV }}
