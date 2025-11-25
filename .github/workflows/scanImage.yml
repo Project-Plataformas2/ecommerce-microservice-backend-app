@@ -1,7 +1,7 @@
 name: Security Scan Pipeline
 
 on:
-  workflow_dispatch:      # Se ejecuta manualmente desde Actions
+  workflow_dispatch:
 
 jobs:
   build-and-scan:
@@ -10,11 +10,13 @@ jobs:
       matrix:
         service: ["api-gateway", "cloud-config", "favourite-service", "order-service", "payment-service", "product-service", "proxy-client", "service-discovery", "shipping-service", "user-service"]
 
+    outputs:
+      results_path: trivy-results
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ⬇️ Compilar proyecto Maven antes de construir imágenes
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -36,7 +38,6 @@ jobs:
           fi
           docker build -t ${{ matrix.service }} -f "$DOCKERFILE" .
 
-      # ⬇️ FIX: Crear carpeta antes del escaneo
       - name: Create results directory
         run: mkdir -p trivy-results
 
@@ -49,33 +50,33 @@ jobs:
           exit-code: "0"
           severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
 
-      - name: Upload SARIF artifacts
-        if: always()
+      # 👉 YA NO SE SUBE ARTIFACT AQUÍ — solo se generan los SARIF
+
+  upload-results:
+    needs: build-and-scan
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download files from runners
+        run: echo "SARIF files are already in workspace"  # no matrix artefacts
+
+      - name: Create artifact if SARIF exist
         uses: actions/upload-artifact@v4
         with:
           name: trivy-results
           path: trivy-results/
+          if-no-files-found: error
 
-  upload:
-    needs: build-and-scan
+  upload-to-security:
+    needs: upload-results
     runs-on: ubuntu-latest
     permissions:
       security-events: write
       contents: read
-
-    strategy:
-      matrix:
-        file:
-          - api-gateway.sarif
-          - cloud-config.sarif
-          - favourite-service.sarif
-          - order-service.sarif
-          - payment-service.sarif
-          - product-service.sarif
-          - proxy-client.sarif
-          - service-discovery.sarif
-          - shipping-service.sarif
-          - user-service.sarif
 
     steps:
       - name: Download artifacts
@@ -86,4 +87,4 @@ jobs:
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: trivy-results/${{ matrix.file }}
+          sarif_file: "trivy-results"
