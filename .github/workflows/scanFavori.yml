@@ -1,0 +1,76 @@
+name: Security Scan Pipeline - favourite-service
+          
+on:
+  workflow_dispatch:      # Se ejecuta manualmente desde Actions
+          
+jobs:
+  build-and-scan-favourite-service:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+          
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          
+      - name: Build all services with Maven
+        # Compila todos los proyectos Maven
+        run: mvn -B clean package -DskipTests
+          
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+          
+      - name: Build favourite-service Docker image
+        run: |
+          DOCKERFILE="./favourite-service/Dockerfile"
+          if [ ! -f "$DOCKERFILE" ]; then
+            echo "::error::Dockerfile not found for favourite-service ($DOCKERFILE)"
+            exit 1
+          fi
+          # Construye la imagen con el nombre del servicio
+          docker build -t favourite-service -f "$DOCKERFILE" .
+          
+      - name: Scan favourite-service with Trivy
+        uses: aquasecurity/trivy-action@0.22.0
+        with:
+          image-ref: favourite-service
+          format: "sarif"
+          # ✅ Guardar el archivo SARIF directamente en la raíz de trabajo.
+          output: "favourite-service.sarif" 
+          exit-code: "0"
+          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+          
+      - name: Upload SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results-favourite-service 
+          # ✅ Subir SOLAMENTE el archivo, sin la carpeta anidada.
+          path: favourite-service.sarif
+          
+  # -----------------------------------------------------------
+  
+  upload-favourite-service:
+    needs: build-and-scan-favourite-service
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+          
+    steps:
+      - name: Download favourite-service artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-results-favourite-service
+          # Path simple de descarga
+          path: downloaded-artifacts
+          
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          # ✅ RUTA FINAL: El archivo está directamente bajo el directorio de descarga.
+          sarif_file: downloaded-artifacts/favourite-service.sarif
