@@ -9,10 +9,6 @@ jobs:
     strategy:
       matrix:
         service: ["api-gateway", "cloud-config", "favourite-service", "order-service", "payment-service", "product-service", "proxy-client", "service-discovery", "shipping-service", "user-service"]
-
-    outputs:
-      results_path: trivy-results
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -38,7 +34,7 @@ jobs:
           fi
           docker build -t ${{ matrix.service }} -f "$DOCKERFILE" .
 
-      - name: Create results directory
+      - name: Create directory for SARIF
         run: mkdir -p trivy-results
 
       - name: Scan with Trivy
@@ -50,41 +46,28 @@ jobs:
           exit-code: "0"
           severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
 
-      # 👉 YA NO SE SUBE ARTIFACT AQUÍ — solo se generan los SARIF
-
-  upload-results:
-    needs: build-and-scan
-    runs-on: ubuntu-latest
-    if: always()
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download files from runners
-        run: echo "SARIF files are already in workspace"  # no matrix artefacts
-
-      - name: Create artifact if SARIF exist
+      # ⚠ aquí se sube el artifact, pero con nombre único por servicio
+      - name: Upload SARIF artifact
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-results
+          name: trivy-results-${{ matrix.service }}
           path: trivy-results/
           if-no-files-found: error
 
   upload-to-security:
-    needs: upload-results
+    needs: build-and-scan
     runs-on: ubuntu-latest
     permissions:
       security-events: write
       contents: read
 
     steps:
-      - name: Download artifacts
+      - name: Download all SARIF artifacts
         uses: actions/download-artifact@v4
         with:
-          name: trivy-results
+          path: sarif-files
 
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: "trivy-results"
+          sarif_file: sarif-files
