@@ -1,0 +1,80 @@
+name: Security Scan Pipeline - api-gateway
+          
+on:
+  workflow_dispatch:      # Se ejecuta manualmente desde Actions
+          
+jobs:
+  build-and-scan-api-gateway:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+          
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          
+      - name: Build all services with Maven
+        # Compila todos los proyectos Maven (necesario si hay dependencias compartidas)
+        run: mvn -B clean package -DskipTests
+          
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+          
+      - name: Build api-gateway Docker image
+        run: |
+          DOCKERFILE="./api-gateway/Dockerfile"
+          if [ ! -f "$DOCKERFILE" ]; then
+            echo "::error::Dockerfile not found for api-gateway ($DOCKERFILE)"
+            exit 1
+          fi
+          # Construye la imagen con el nombre del servicio
+          docker build -t api-gateway -f "$DOCKERFILE" .
+          
+      - name: Create results directory
+        run: mkdir -p trivy-results
+          
+      - name: Scan api-gateway with Trivy
+        uses: aquasecurity/trivy-action@0.22.0
+        with:
+          image-ref: api-gateway
+          format: "sarif"
+          # El resultado se guarda como trivy-results/api-gateway.sarif
+          output: "trivy-results/api-gateway.sarif" 
+          exit-code: "0"
+          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+          
+      - name: Upload SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # Nombre ÚNICO del artifact
+          name: trivy-results-api-gateway 
+          path: trivy-results/
+          
+  # -----------------------------------------------------------
+  
+  upload-api-gateway:
+    needs: build-and-scan-api-gateway
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+          
+    steps:
+      - name: Download api-gateway artifact
+        uses: actions/download-artifact@v4
+        with:
+          # Descarga el artifact con el nombre único
+          name: trivy-results-api-gateway
+          # Path simple de descarga (solución al error anterior)
+          path: downloaded-artifacts
+          
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          # Ruta exacta donde el archivo reside tras la descarga
+          sarif_file: downloaded-artifacts/trivy-results/api-gateway.sarif
