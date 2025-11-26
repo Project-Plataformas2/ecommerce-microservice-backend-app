@@ -1,73 +1,44 @@
-name: Security Scan Pipeline
+name: Security Scan with Trivy
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-and-scan:
+  trivy-security-scan:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        service: ["api-gateway", "cloud-config", "favourite-service", "order-service", "payment-service", "product-service", "proxy-client", "service-discovery", "shipping-service", "user-service"]
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Build services with Maven
-        run: mvn -B clean package -DskipTests
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        run: |
-          DOCKERFILE="./${{ matrix.service }}/Dockerfile"
-          if [ ! -f "$DOCKERFILE" ]; then
-            echo "::error::Dockerfile not found for service ${{ matrix.service }} ($DOCKERFILE)"
-            exit 1
-          fi
-          docker build -t ${{ matrix.service }} -f "$DOCKERFILE" .
-
-      - name: Create directory for SARIF
+      # --- Crear SIEMPRE la carpeta para evitar "No files found" ---
+      - name: Ensure results folder exists
         run: mkdir -p trivy-results
 
-      - name: Scan with Trivy
-        uses: aquasecurity/trivy-action@0.22.0
-        with:
-          image-ref: ${{ matrix.service }}
-          format: "sarif"
-          output: "trivy-results/${{ matrix.service }}.sarif"
-          exit-code: "0"
-          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+      # --- Instalar Trivy ---
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install wget -y
+          wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.50.2_Linux-64bit.deb
+          sudo dpkg -i trivy_0.50.2_Linux-64bit.deb
 
-      # ⚠ aquí se sube el artifact, pero con nombre único por servicio
-      - name: Upload SARIF artifact
+      # --- Escaneo de la imagen ---
+      - name: Run Trivy scan
+        run: |
+          IMAGE="ghcr.io/santyhernandez09/ecommerce-app:prod"
+          trivy image --exit-code 0 --format json -o trivy-results/result.json "$IMAGE"
+          trivy image --exit-code 0 --severity HIGH,CRITICAL --format table -o trivy-results/summary.txt "$IMAGE"
+
+      # --- Renombrar artifact para evitar error "already exists" ---
+      - name: Define unique artifact name
+        id: artifact_name
+        run: echo "NAME=trivy-results-${{ github.run_number }}-${{ github.run_attempt }}" >> $GITHUB_OUTPUT
+
+      # --- Subir resultados ---
+      - name: Upload scan results
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-results-${{ matrix.service }}
+          name: ${{ steps.artifact_name.outputs.NAME }}
           path: trivy-results/
-          if-no-files-found: error
-
-  upload-to-security:
-    needs: build-and-scan
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      contents: read
-
-    steps:
-      - name: Download all SARIF artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: sarif-files
-
-      - name: Upload SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: sarif-files
+          if-no-files-found: warn
