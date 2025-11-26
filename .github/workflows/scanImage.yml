@@ -22,7 +22,6 @@ jobs:
           java-version: '17'
           
       - name: Build services with Maven
-        # Este paso compilará todos los proyectos Maven
         run: mvn -B clean package -DskipTests
           
       - name: Set up Docker Buildx
@@ -35,10 +34,9 @@ jobs:
             echo "::error::Dockerfile not found for service ${{ matrix.service }} ($DOCKERFILE)"
             exit 1
           fi
-          # Construye la imagen con el nombre del servicio
           docker build -t ${{ matrix.service }} -f "$DOCKERFILE" .
           
-      # ⬇️ FIX: Crear carpeta antes del escaneo
+      # ⬇️ Preparación y Escaneo
       - name: Create results directory
         run: mkdir -p trivy-results
           
@@ -47,7 +45,6 @@ jobs:
         with:
           image-ref: ${{ matrix.service }}
           format: "sarif"
-          # El archivo de salida siempre será trivy-results/[nombre-servicio].sarif
           output: "trivy-results/${{ matrix.service }}.sarif" 
           exit-code: "0"
           severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
@@ -56,8 +53,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          # ✅ SOLUCIÓN: Usar un nombre de artifact único por servicio para evitar el conflicto 409
+          # Nombre ÚNICO del artifact por servicio
           name: trivy-results-${{ matrix.service }} 
+          # Sube la carpeta 'trivy-results' con el archivo SARIF dentro
           path: trivy-results/
           
   upload:
@@ -69,20 +67,20 @@ jobs:
           
     strategy:
       matrix:
-        # ✅ CAMBIO: Iterar sobre los nombres de los servicios (igual que en el job anterior)
         service: ["api-gateway", "cloud-config", "favourite-service", "order-service", "payment-service", "product-service", "proxy-client", "service-discovery", "shipping-service", "user-service"]
           
     steps:
       - name: Download service artifact
         uses: actions/download-artifact@v4
         with:
-          # ✅ DESCARGA: Descargar el artifact único de ese servicio
           name: trivy-results-${{ matrix.service }}
-          # Especificar un path para descargar
-          path: downloaded-artifacts/${{ matrix.service }}
+          # ✅ CAMBIO CLAVE: Descargar el contenido del artifact a un solo directorio.
+          # El contenido del artifact (la carpeta 'trivy-results') se pondrá AQUÍ.
+          path: downloaded-artifacts
           
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
         with:
-          # ✅ RUTA FINAL: Construir la ruta completa al archivo SARIF dentro del artifact descargado
-          sarif_file: downloaded-artifacts/${{ matrix.service }}/trivy-results/${{ matrix.service }}.sarif
+          # ✅ RUTA CORREGIDA: Acceder directamente a la subcarpeta 'trivy-results/'
+          # que fue colocada dentro de 'downloaded-artifacts' por el paso anterior.
+          sarif_file: downloaded-artifacts/trivy-results/${{ matrix.service }}.sarif
