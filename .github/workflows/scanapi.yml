@@ -31,19 +31,15 @@ jobs:
             echo "::error::Dockerfile not found for api-gateway ($DOCKERFILE)"
             exit 1
           fi
-          # Construye la imagen con el nombre del servicio
           docker build -t api-gateway -f "$DOCKERFILE" .
-          
-      - name: Create results directory
-        run: mkdir -p trivy-results
           
       - name: Scan api-gateway with Trivy
         uses: aquasecurity/trivy-action@0.22.0
         with:
           image-ref: api-gateway
           format: "sarif"
-          # El resultado se guarda como trivy-results/api-gateway.sarif
-          output: "trivy-results/api-gateway.sarif" 
+          # ✅ CORRECCIÓN CLAVE 1: Guardar el archivo SARIF directamente en la raíz de trabajo.
+          output: "api-gateway.sarif" 
           exit-code: "0"
           severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
           
@@ -51,9 +47,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          # Nombre ÚNICO del artifact
           name: trivy-results-api-gateway 
-          path: trivy-results/
+          # ✅ CORRECCIÓN CLAVE 2: Subir SOLAMENTE el archivo, no una carpeta que lo contiene.
+          path: api-gateway.sarif
           
   # -----------------------------------------------------------
   
@@ -68,13 +64,12 @@ jobs:
       - name: Download api-gateway artifact
         uses: actions/download-artifact@v4
         with:
-          # Descarga el artifact con el nombre único
           name: trivy-results-api-gateway
-          # Path simple de descarga (solución al error anterior)
+          # Path simple de descarga
           path: downloaded-artifacts
           
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
         with:
-          # Ruta exacta donde el archivo reside tras la descarga
-          sarif_file: downloaded-artifacts/trivy-results/api-gateway.sarif
+          # ✅ RUTA FINAL CORREGIDA: El archivo está directamente bajo el directorio de descarga.
+          sarif_file: downloaded-artifacts/api-gateway.sarif
